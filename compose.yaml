@@ -1,0 +1,61 @@
+# Local development stack: API + PostgreSQL + Redis with the same connection
+# shapes the ECS task receives in production.
+#
+#   docker compose up --build
+#   curl localhost:3000/health
+#
+# Credentials here are throwaway local values, not secrets.
+
+services:
+  api:
+    build:
+      context: .
+      target: runtime
+    image: cloud-infra-cicd-pipeline:local
+    ports:
+      - "3000:3000"
+    environment:
+      NODE_ENV: development
+      PORT: "3000"
+      LOG_LEVEL: debug
+      DATABASE_URL: postgres://app:localdev@postgres:5432/app?sslmode=disable
+      REDIS_URL: redis://redis:6379
+      DATABASE_POOL_SIZE: "5"
+      GRACEFUL_SHUTDOWN_MS: "10000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    stop_grace_period: 30s
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: localdev
+      POSTGRES_DB: app
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U app -d app"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  pgdata:

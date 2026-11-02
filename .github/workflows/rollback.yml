@@ -1,0 +1,87 @@
+name: Rollback
+
+# One-click rollback, independent of the deploy workflow.
+#
+#   Actions -> Rollback -> Run workflow
+#     task_definition: (leave empty to go to the previous ACTIVE revision)
+#     reason: incident reference
+#
+# The rollback reuses the same ECS update path as a normal deploy, so the ALB
+# drains and swaps tasks exactly the way a release does.
+
+on:
+  workflow_dispatch:
+    inputs:
+      task_definition:
+        description: "Task definition ARN to restore (empty = previous ACTIVE revision)"
+        required: false
+        type: string
+      reason:
+        description: "Why is this rollback happening? (recorded in the run summary)"
+        required: true
+        type: string
+
+permissions:
+  id-token: write
+  contents: read
+
+# Shares the deploy group so a rollback can never overlap a release.
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION || 'af-south-1' }}
+  ECS_CLUSTER: ${{ vars.ECS_CLUSTER }}
+  ECS_SERVICE: ${{ vars.ECS_SERVICE }}
+
+jobs:
+  rollback:
+    name: Restore previous revision
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment:
+      name: production
+      url: ${{ vars.ALB_URL }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          role-session-name: gha-rollback-${{ github.run_id }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Roll back
+        env:
+          CLUSTER: ${{ env.ECS_CLUSTER }}
+          SERVICE: ${{ env.ECS_SERVICE }}
+          REASON: ${{ inputs.reason }}
+        run: |
+          echo "Reason: ${REASON}"
+          ./scripts/rollback.sh "${{ inputs.task_definition }}"
+
+      - name: Smoke test after rollback
+        run: ./scripts/smoke-test.sh "${{ vars.ALB_URL }}"
+
+      - name: Summarise
+        run: |
+          {
+            echo "### Rollback complete"
+            echo ""
+            echo "| Field | Value |"
+            echo "| --- | --- |"
+            echo "| Service | \`${ECS_SERVICE}\` |"
+            echo "| Time (UTC) | $(date -u +%Y-%m-%dT%H:%M:%SZ) |"
+            echo "| Triggered by | @${GITHUB_ACTOR} |"
+            echo "| Reason | ${REASON} |"
+            echo "| Target | \`${{ inputs.task_definition }}\` (empty = previous revision) |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # A rollback is a production event: it belongs in the maintenance log.
+      - name: Reminder to update the maintenance log
+        run: |
+          echo "::warning::Rollback executed. Add an entry to docs/MAINTENANCE_LOG.md with the incident reference and the restored revision."

@@ -1,0 +1,10 @@
+###############################################################################
+# Copy to backend.hcl (git ignored) and fill in your account values.
+# scripts/bootstrap-aws.sh generates this file for you.
+###############################################################################
+
+bucket         = "sa-enterprise-terraform-state-<account-id>"
+key            = "cloud-infra-cicd/prod/terraform.tfstate"
+region         = "af-south-1"
+dynamodb_table = "sa-enterprise-terraform-locks"
+encrypt        = true

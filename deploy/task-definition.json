@@ -1,0 +1,54 @@
+{
+  "family": "sa-enterprise-prod-api",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "512",
+  "memory": "1024",
+  "executionRoleArn": "arn:aws:iam::<account-id>:role/sa-enterprise-prod-ecs-execution",
+  "taskRoleArn": "arn:aws:iam::<account-id>:role/sa-enterprise-prod-ecs-task",
+  "runtimePlatform": {
+    "operatingSystemFamily": "LINUX",
+    "cpuArchitecture": "X86_64"
+  },
+  "containerDefinitions": [
+    {
+      "name": "api-container",
+      "image": "<account-id>.dkr.ecr.af-south-1.amazonaws.com/sa-enterprise-prod/api:bootstrap",
+      "essential": true,
+      "portMappings": [
+        {
+          "containerPort": 3000,
+          "hostPort": 3000,
+          "protocol": "tcp"
+        }
+      ],
+      "environment": [
+        { "name": "NODE_ENV", "value": "production" },
+        { "name": "PORT", "value": "3000" },
+        { "name": "DATABASE_SSL", "value": "true" }
+      ],
+      "secrets": [
+        {
+          "name": "DATABASE_URL",
+          "valueFrom": "arn:aws:secretsmanager:af-south-1:<account-id>:secret:sa-enterprise-prod/database-url"
+        },
+        {
+          "name": "REDIS_URL",
+          "valueFrom": "arn:aws:secretsmanager:af-south-1:<account-id>:secret:sa-enterprise-prod/redis-url"
+        }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/sa-enterprise-prod/api",
+          "awslogs-region": "af-south-1",
+          "awslogs-stream-prefix": "api"
+        }
+      },
+      "stopTimeout": 30,
+      "linuxParameters": {
+        "initProcessEnabled": true
+      }
+    }
+  ]
+}

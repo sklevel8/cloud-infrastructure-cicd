@@ -1,0 +1,32 @@
+{
+  "name": "cloud-infra-cicd-pipeline",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Containerised Node.js API with Terraform-provisioned AWS infrastructure and a zero-downtime GitHub Actions deployment pipeline.",
+  "type": "module",
+  "main": "src/server.js",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "migrate": "node scripts/migrate.js",
+    "test": "node --test \"test/**/*.test.js\"",
+    "test:coverage": "c8 --reporter=text --reporter=lcov --reporter=text-summary node --test \"test/**/*.test.js\"",
+    "lint": "eslint .",
+    "audit:ci": "audit-ci --high"
+  },
+  "dependencies": {
+    "@prometheus-io/client": "^0.16.1",
+    "express": "^4.21.2",
+    "pg": "^8.13.1",
+    "redis": "^4.7.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.0",
+    "audit-ci": "^7.1.0",
+    "c8": "^10.1.3",
+    "eslint": "^10.0.0"
+  }
+}

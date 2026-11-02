@@ -1,0 +1,145 @@
+name: Terraform
+
+# Infrastructure changes follow the same review path as application changes:
+# PR -> plan, manual dispatch -> apply (behind the production environment).
+
+on:
+  pull_request:
+    paths:
+      - "terraform/**"
+      - ".github/workflows/terraform.yml"
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "Terraform action"
+        required: true
+        type: choice
+        options: [plan, apply]
+        default: plan
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: terraform-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION || 'af-south-1' }}
+  TF_IN_AUTOMATION: "true"
+  TF_INPUT: "false"
+  TF_VERSION: "1.9.8"
+
+jobs:
+  plan:
+    name: Plan
+    if: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository || inputs.action == 'plan' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    defaults:
+      run:
+        working-directory: terraform
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          role-session-name: gha-tf-plan-${{ github.run_id }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Write backend configuration
+        run: |
+          cat > backend.hcl <<EOF
+          bucket         = "${{ vars.TF_STATE_BUCKET }}"
+          key            = "${GITHUB_REPOSITORY}/prod/terraform.tfstate"
+          region         = "${AWS_REGION}"
+          dynamodb_table = "${{ vars.TF_STATE_LOCK_TABLE }}"
+          encrypt        = true
+          EOF
+
+      - name: terraform fmt
+        run: terraform fmt -check -recursive -diff
+
+      - name: terraform init
+        run: terraform init -backend-config=backend.hcl
+
+      - name: terraform validate
+        run: terraform validate
+
+      - name: terraform plan
+        run: terraform plan -var-file=envs/prod.tfvars -lock-timeout=5m -out=tfplan
+
+      - name: Attach plan to the job summary
+        run: |
+          terraform show -no-color tfplan > plan.txt || true
+          {
+            echo "### Terraform plan"
+            echo '```'
+            head -n 200 plan.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  apply:
+    name: Apply
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.action == 'apply' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment:
+      name: production
+
+    defaults:
+      run:
+        working-directory: terraform
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          role-session-name: gha-tf-apply-${{ github.run_id }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Write backend configuration
+        run: |
+          cat > backend.hcl <<EOF
+          bucket         = "${{ vars.TF_STATE_BUCKET }}"
+          key            = "${GITHUB_REPOSITORY}/prod/terraform.tfstate"
+          region         = "${AWS_REGION}"
+          dynamodb_table = "${{ vars.TF_STATE_LOCK_TABLE }}"
+          encrypt        = true
+          EOF
+
+      - name: terraform init
+        run: terraform init -backend-config=backend.hcl
+
+      - name: terraform apply
+        run: terraform apply -auto-approve -var-file=envs/prod.tfvars -lock-timeout=10m
+
+      - name: Export outputs
+        run: |
+          terraform output -json > outputs.json
+          echo "### Terraform outputs" >> "$GITHUB_STEP_SUMMARY"
+          echo '```json' >> "$GITHUB_STEP_SUMMARY"
+          cat outputs.json >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"

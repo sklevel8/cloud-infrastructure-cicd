@@ -1,0 +1,236 @@
+name: Deploy
+
+# Merge to main -> test -> build immutable image -> rolling ECS update -> smoke
+# test -> automatic rollback if anything after the update fails.
+#
+# Authentication uses GitHub OIDC: no long lived AWS keys exist in this repo.
+# Repository variables required (Settings -> Variables):
+#   AWS_DEPLOY_ROLE_ARN, ECR_REPOSITORY, ECS_CLUSTER, ECS_SERVICE, ALB_URL
+# Optional: AWS_REGION (defaults to af-south-1)
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      skip_tests:
+        description: Skip the test gate (emergency redeploy only)
+        type: boolean
+        default: false
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION || 'af-south-1' }}
+  ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
+  ECS_CLUSTER: ${{ vars.ECS_CLUSTER }}
+  ECS_SERVICE: ${{ vars.ECS_SERVICE }}
+  CONTAINER_NAME: api-container
+  ALB_URL: ${{ vars.ALB_URL }}
+
+jobs:
+  verify:
+    name: Verify
+    if: ${{ !inputs.skip_tests }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint and test
+        run: |
+          npm run lint
+          npm test
+
+      - name: Check Terraform formatting
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.9.8"
+          terraform_wrapper: false
+
+      - name: terraform fmt
+        run: terraform fmt -check -recursive terraform
+
+  build-and-push:
+    name: Build and push image
+    needs: verify
+    if: ${{ always() && (needs.verify.result == 'success' || inputs.skip_tests) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    outputs:
+      image: ${{ steps.meta.outputs.image }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          role-session-name: gha-deploy-${{ github.run_id }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Log in to Amazon ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Define image reference
+        id: meta
+        run: |
+          registry="${{ steps.ecr.outputs.registry }}"
+          image="${registry}/${ECR_REPOSITORY}:${GITHUB_SHA}"
+          echo "image=${image}" >> "$GITHUB_OUTPUT"
+          echo "Building ${image}"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: runtime
+          push: true
+          # The Git SHA is the only tag. ECR is IMMUTABLE, so a tag can never
+          # silently point at a different image after the fact.
+          tags: ${{ steps.meta.outputs.image }}
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.version=${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: true
+          sbom: true
+
+      - name: Image digest
+        run: |
+          echo "### Image published" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "${{ steps.meta.outputs.image }}" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+  deploy:
+    name: Deploy to ECS
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment:
+      name: production
+      url: ${{ vars.ALB_URL }}
+
+    outputs:
+      previous_task_definition: ${{ steps.previous.outputs.arn }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          role-session-name: gha-ecs-${{ github.run_id }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      # Captured before the update so rollback has an exact target.
+      - name: Record current task definition
+        id: previous
+        run: |
+          arn="$(aws ecs describe-services \
+            --cluster "${ECS_CLUSTER}" \
+            --services "${ECS_SERVICE}" \
+            --query 'services[0].taskDefinition' --output text)"
+          echo "arn=${arn}" >> "$GITHUB_OUTPUT"
+          echo "Currently running: ${arn##*/}"
+
+      - name: Export live task definition
+        run: ./scripts/export-task-definition.sh deploy/task-definition.json
+
+      - name: Render new task definition
+        id: render
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: deploy/task-definition.json
+          container-name: ${{ env.CONTAINER_NAME }}
+          image: ${{ needs.build-and-push.outputs.image }}
+
+      - name: Deploy (rolling update, wait for stability)
+        id: deploy
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v2
+        with:
+          task-definition: ${{ steps.render.outputs.task-definition }}
+          service: ${{ env.ECS_SERVICE }}
+          cluster: ${{ env.ECS_CLUSTER }}
+          wait-for-service-stability: true
+          wait-for-minutes: 20
+
+      - name: Smoke test through the load balancer
+        run: ./scripts/smoke-test.sh "${ALB_URL}"
+
+      - name: Record deployment in the summary
+        if: success()
+        run: |
+          {
+            echo "### Deployment successful"
+            echo ""
+            echo "| Field | Value |"
+            echo "| --- | --- |"
+            echo "| Service | \`${ECS_SERVICE}\` |"
+            echo "| Cluster | \`${ECS_CLUSTER}\` |"
+            echo "| Image | \`${{ needs.build-and-push.outputs.image }}\` |"
+            echo "| Task definition | \`${{ steps.deploy.outputs.task-definition-arn }}\` |"
+            echo "| Commit | \`${GITHUB_SHA}\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # Runs when the update, the stability wait or the smoke test failed.
+      - name: Roll back to the previous revision
+        if: failure() && steps.previous.outputs.arn != ''
+        env:
+          CLUSTER: ${{ env.ECS_CLUSTER }}
+          SERVICE: ${{ env.ECS_SERVICE }}
+        run: ./scripts/rollback.sh "${{ steps.previous.outputs.arn }}"
+
+      - name: Summarise failed deployment
+        if: failure()
+        run: |
+          {
+            echo "### Deployment failed - rollback attempted"
+            echo ""
+            echo "Previous revision: \`${{ steps.previous.outputs.arn }}\`"
+            echo ""
+            echo "Check \`aws logs tail /ecs/${ECS_CLUSTER}/api --follow\` and the ECS service events."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  verify-production:
+    name: Post-deploy verification
+    needs: [deploy]
+    if: always() && needs.deploy.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Confirm /health and /ready from a clean runner
+        run: ./scripts/smoke-test.sh "${{ vars.ALB_URL }}"
