@@ -1,0 +1,229 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#0d0805" />
+  <meta name="description" content="Cloud Infrastructure CI/CD — a production-shaped AWS platform: containerised Node API on ECS, Terraform, rolling deploys and GitHub Actions pipelines." />
+  <title>Cloud Console — ECS platform &amp; delivery pipeline</title>
+  <link rel="icon" href="favicon.svg" type="image/svg+xml" />
+  <link rel="stylesheet" href="app.css" />
+  <link rel="stylesheet" href="theme.css" />
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+
+  <header class="topbar">
+    <div class="shell topbar__inner">
+      <a class="brand" href="./" aria-label="Cloud Console home">
+        <span class="brand__mark" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+            <path d="M7 18h10a4 4 0 0 0 .6-7.96A5.5 5.5 0 0 0 6.7 9.2 4.4 4.4 0 0 0 7 18Z" stroke-linejoin="round"/>
+            <path d="M12 11v6m0 0-2-2m2 2 2-2" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </span>
+        <span class="brand__name">Cloud<span>Console</span></span>
+        <span class="brand__tag">ecs · terraform</span>
+      </a>
+      <nav class="nav" aria-label="Primary">
+        <a href="#overview" class="is-active">Overview</a>
+        <a href="#metrics">Metrics</a>
+        <a href="#pipeline">Pipeline</a>
+        <span class="nav__divider" aria-hidden="true"></span>
+        <a href="https://github.com/sklevel8/cloud-infrastructure-cicd" target="_blank" rel="noopener">GitHub ↗</a>
+      </nav>
+    </div>
+  </header>
+
+  <main id="main" class="shell page">
+    <section class="hero" id="overview">
+      <div>
+        <div class="eyebrow"><span class="eyebrow__dot"></span> af-south-1 · ECS Fargate</div>
+        <h1>Ship it without <span>taking it down.</span></h1>
+        <p class="lede">
+          A production-shaped AWS platform: a containerised Node API behind an ALB, ECS rolling
+          deployments with circuit breakers, Terraform-managed networking, and GitHub Actions
+          pipelines that plan, apply, migrate and verify.
+        </p>
+        <div class="hero-pills">
+          <span class="badge badge--ok"><span class="dot dot--pulse"></span> all systems operational</span>
+          <span class="badge">3 / 3 tasks healthy</span>
+          <span class="badge">v1.4.2 live</span>
+        </div>
+      </div>
+
+      <div class="card card--accent">
+        <div class="card__head">
+          <div>
+            <h2 class="card__title">Service health</h2>
+            <p class="card__hint mono">cloud-infra-api · production</p>
+          </div>
+          <span class="badge badge--ok">healthy</span>
+        </div>
+        <div class="health-grid">
+          <div><span class="stat__label">p95 latency</span><span class="stat__value" id="hP95">84<span class="unit">ms</span></span></div>
+          <div><span class="stat__label">Requests / min</span><span class="stat__value" id="hRps">1 284</span></div>
+          <div><span class="stat__label">Error rate</span><span class="stat__value" id="hErr">0.12<span class="unit">%</span></span></div>
+          <div><span class="stat__label">Uptime (30d)</span><span class="stat__value">99.98<span class="unit">%</span></span></div>
+        </div>
+        <div class="health-foot">
+          <span class="dim tiny">Last deploy 42 min ago</span>
+          <a class="tiny" href="#pipeline">View pipeline →</a>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="metrics">
+      <div class="section__head">
+        <div>
+          <h2 class="h2">Request latency</h2>
+          <p class="section__desc">Percentiles from the Prometheus histogram exposed on <code class="mono">/metrics</code>.</p>
+        </div>
+        <div class="tabs" role="tablist" aria-label="Time window">
+          <button class="tab" role="tab" aria-selected="false" data-window="1">1h</button>
+          <button class="tab" role="tab" aria-selected="true" data-window="6">6h</button>
+          <button class="tab" role="tab" aria-selected="false" data-window="24">24h</button>
+        </div>
+      </div>
+
+      <div class="grid grid--sidebar">
+        <div class="card">
+          <div class="card__head">
+            <div>
+              <h3 class="card__title">Latency percentiles</h3>
+              <p class="card__hint" id="chartHint">last 6 hours · 60 buckets</p>
+            </div>
+            <div class="legend" id="legend"></div>
+          </div>
+          <div class="chart-wrap">
+            <svg id="latencyChart" class="chart" viewBox="0 0 720 280" role="img" aria-label="Latency percentile chart"></svg>
+          </div>
+        </div>
+
+        <aside class="card">
+          <div class="card__head">
+            <div>
+              <h3 class="card__title">SLOs</h3>
+              <p class="card__hint">Rolling 30 days</p>
+            </div>
+          </div>
+          <div class="slo">
+            <div class="slo__head"><span>Availability</span><span class="mono">99.98 / 99.9%</span></div>
+            <div class="meter"><span style="width:99.9%"></span></div>
+          </div>
+          <div class="slo">
+            <div class="slo__head"><span>p95 &lt; 250 ms</span><span class="mono">84 ms</span></div>
+            <div class="meter"><span style="width:88%"></span></div>
+          </div>
+          <div class="slo">
+            <div class="slo__head"><span>5xx &lt; 0.5%</span><span class="mono">0.12%</span></div>
+            <div class="meter"><span style="width:94%"></span></div>
+          </div>
+          <hr class="divider" />
+          <div class="row" style="justify-content:space-between">
+            <span class="dim tiny">Error budget left</span>
+            <span class="badge badge--ok">72%</span>
+          </div>
+        </aside>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="section__head">
+        <div>
+          <h2 class="h2">Topology</h2>
+          <p class="section__desc">Every hop is provisioned in Terraform — no console clicks.</p>
+        </div>
+        <span class="badge">compose.yaml for local parity</span>
+      </div>
+
+      <div class="card topo-card">
+        <div class="topology">
+          <div class="topo-node"><span class="topo-tag">edge</span><strong>Route 53</strong><span>DNS + ACM</span></div>
+          <div class="topo-arrow" aria-hidden="true">→</div>
+          <div class="topo-node"><span class="topo-tag">ingress</span><strong>ALB</strong><span>health checks</span></div>
+          <div class="topo-arrow" aria-hidden="true">→</div>
+          <div class="topo-node topo-node--accent"><span class="topo-tag">compute</span><strong>ECS Fargate</strong><span>3 tasks · rolling</span></div>
+          <div class="topo-arrow" aria-hidden="true">→</div>
+          <div class="topo-stack">
+            <div class="topo-node topo-node--sm"><strong>RDS Postgres</strong><span>multi-AZ</span></div>
+            <div class="topo-node topo-node--sm"><strong>ElastiCache</strong><span>redis</span></div>
+          </div>
+        </div>
+        <div class="topo-foot">
+          <span class="dim tiny">Autoscaling 2–6 tasks · target 60% CPU</span>
+          <span class="dim tiny">Circuit breaker: rollback on failed health check</span>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="pipeline">
+      <div class="section__head">
+        <div>
+          <h2 class="h2">Delivery pipeline</h2>
+          <p class="section__desc">CI on every push, deploy on main, rollback on demand.</p>
+        </div>
+        <span class="badge badge--ok">last run 42 min ago</span>
+      </div>
+
+      <div class="grid grid--sidebar">
+        <div class="card card--flush">
+          <div class="table-wrap">
+            <table class="table">
+              <thead><tr><th>Stage</th><th>Workflow</th><th>Duration</th><th>Result</th><th>Commit</th></tr></thead>
+              <tbody id="pipelineBody"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <aside class="card">
+          <div class="card__head">
+            <div>
+              <h3 class="card__title">Deployments</h3>
+              <p class="card__hint">Newest first</p>
+            </div>
+          </div>
+          <ol class="deploys" id="deploys"></ol>
+        </aside>
+      </div>
+
+      <div class="grid grid--3" style="margin-top:16px">
+        <article class="card"><h3 class="h3">Quality gates</h3><p class="muted small">ESLint, unit tests with coverage, <code class="mono">audit-ci --high</code> and a container build must all pass before deploy.</p></article>
+        <article class="card"><h3 class="h3">Zero downtime</h3><p class="muted small">ECS minimum-healthy-percent 100, maximum 200. New tasks must pass <code class="mono">/ready</code> before traffic shifts.</p></article>
+        <article class="card"><h3 class="h3">Instant rollback</h3><p class="muted small">The rollback workflow pins the previous task definition and waits for service stability, with a smoke test afterwards.</p></article>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="section__head">
+        <div>
+          <h2 class="h2">API surface</h2>
+          <p class="section__desc">Probed every 15 seconds by the ALB target group.</p>
+        </div>
+      </div>
+      <div class="card card--flush">
+        <div class="table-wrap">
+          <table class="table">
+            <thead><tr><th>Method</th><th>Path</th><th>Purpose</th><th class="num">p95</th><th>Status</th></tr></thead>
+            <tbody id="endpoints"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <footer class="footer">
+      <div class="footer__inner">
+        <span>Built by Sipho Makubalo · Terraform, ECS and GitHub Actions.</span>
+        <div class="row row--tight">
+          <a href="https://github.com/sklevel8/cloud-infrastructure-cicd" target="_blank" rel="noopener">Source</a>
+          <span class="dim">·</span>
+          <a href="https://sklevel8-portfolio.netlify.app" target="_blank" rel="noopener">All projects</a>
+        </div>
+      </div>
+    </footer>
+  </main>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <script src="app.js"></script>
+</body>
+</html>

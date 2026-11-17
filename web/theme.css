@@ -1,0 +1,79 @@
+/* Cloud Console theme ----------------------------------------------------- */
+:root {
+  --accent: #f97316;
+  --accent-2: #fdba74;
+  --accent-soft: rgba(249, 115, 22, 0.12);
+  --accent-line: rgba(249, 115, 22, 0.4);
+}
+
+.unit { color: var(--dim); font-size: 0.82rem; font-weight: 500; margin-left: 1px; }
+.hero-pills { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 24px; }
+
+.health-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
+.health-grid > div { display: flex; flex-direction: column; gap: 2px; padding: 13px; border: 1px solid var(--line); border-radius: 10px; background: rgba(255, 255, 255, 0.02); }
+.health-grid .stat__value { font-size: 1.5rem; }
+.health-foot { display: flex; align-items: center; justify-content: space-between; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); }
+.health-foot a { color: var(--accent-2); }
+
+.legend { display: flex; gap: 10px; flex-wrap: wrap; }
+.legend button {
+  display: inline-flex; align-items: center; gap: 6px; padding: 3px 8px;
+  border: 1px solid var(--line); border-radius: 999px; background: transparent;
+  color: var(--muted); font-size: 0.72rem; transition: opacity 0.15s ease, border-color 0.15s ease;
+}
+.legend button[aria-pressed="false"] { opacity: 0.4; }
+.legend i { width: 8px; height: 8px; border-radius: 2px; background: currentColor; }
+.chart-wrap { width: 100%; overflow: hidden; }
+.chart-label { fill: var(--dim); font-size: 10px; font-family: var(--mono); }
+
+.slo { margin-bottom: 16px; }
+.slo:last-of-type { margin-bottom: 0; }
+.slo__head { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 0.82rem; margin-bottom: 7px; }
+.slo__head span:last-child { color: var(--muted); font-size: 0.76rem; }
+.meter { height: 5px; border-radius: 999px; background: rgba(255, 255, 255, 0.07); overflow: hidden; }
+.meter span { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--accent), var(--accent-2)); }
+
+.topo-card { padding: 24px; }
+.topology { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.topo-node {
+  display: flex; flex-direction: column; gap: 2px; min-width: 140px; padding: 13px 15px;
+  border: 1px solid var(--line); border-radius: 11px; background: rgba(255, 255, 255, 0.025);
+}
+.topo-node strong { font-size: 0.87rem; }
+.topo-node span { color: var(--dim); font-size: 0.72rem; }
+.topo-node .topo-tag {
+  color: var(--accent-2); font-family: var(--mono); font-size: 0.62rem;
+  letter-spacing: 0.1em; text-transform: uppercase; margin-bottom: 3px;
+}
+.topo-node--accent { border-color: var(--accent-line); background: linear-gradient(160deg, var(--accent-soft), rgba(255,255,255,0.02)); }
+.topo-node--sm { min-width: 130px; padding: 10px 13px; }
+.topo-arrow { color: var(--dim); font-size: 1rem; }
+.topo-stack { display: flex; flex-direction: column; gap: 8px; }
+.topo-foot { display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--line); }
+
+.deploys { display: flex; flex-direction: column; }
+.deploy { position: relative; padding: 0 0 16px 22px; border-left: 1px solid var(--line); }
+.deploy:last-child { padding-bottom: 0; border-left-color: transparent; }
+.deploy::before {
+  content: ""; position: absolute; left: -4.5px; top: 5px; width: 8px; height: 8px;
+  border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 3px rgba(249, 115, 22, 0.16);
+}
+.deploy:first-child::before { background: var(--ok); box-shadow: 0 0 0 3px rgba(52, 211, 153, 0.16); }
+.deploy__head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.deploy__head strong { font-family: var(--mono); font-size: 0.84rem; }
+.deploy__meta { color: var(--dim); font-size: 0.74rem; margin-top: 2px; }
+
+.status-pill { display: inline-flex; align-items: center; gap: 5px; font-size: 0.76rem; font-weight: 600; }
+.status-pill--ok { color: var(--ok); }
+.status-pill--run { color: var(--warn); }
+.method { font-family: var(--mono); font-size: 0.72rem; font-weight: 700; color: var(--accent-2); }
+
+@media (max-width: 860px) {
+  .topology { flex-direction: column; align-items: stretch; }
+  .topo-arrow { transform: rotate(90deg); text-align: center; }
+  .topo-stack { flex-direction: row; flex-wrap: wrap; }
+  .topo-node { min-width: 0; }
+}
+@media (max-width: 620px) {
+  .health-grid { grid-template-columns: 1fr 1fr; }
+}
