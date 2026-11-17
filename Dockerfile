@@ -4,7 +4,7 @@
 # Build stage: install production dependencies only.
 # The lockfile is copied first so image layers are cached across source changes.
 ###############################################################################
-FROM node:24-alpine AS deps
+FROM node:26-alpine AS deps
 
 WORKDIR /app
 COPY package.json package-lock.json ./
@@ -13,7 +13,7 @@ RUN npm ci --omit=dev --ignore-scripts && npm cache clean --force
 ###############################################################################
 # Runtime stage: distroless-ish, non-root, read-only friendly.
 ###############################################################################
-FROM node:24-alpine AS runtime
+FROM node:26-alpine AS runtime
 
 ENV NODE_ENV=production \
     PORT=3000 \
