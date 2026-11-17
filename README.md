@@ -1,29 +1,45 @@
 # Cloud Infrastructure & CI/CD Pipeline
 
-A production-shaped, fully automated deployment platform: a containerised Node.js API, its
-entire AWS footprint defined in Terraform, and a GitHub Actions pipeline that ships merges to
-`main` with zero downtime and a one-click rollback.
+A production-shaped deployment platform: a containerised Node.js API, its entire AWS footprint in
+Terraform, and a GitHub Actions pipeline that ships merges to `main` with zero downtime and a
+one-click rollback.
 
-Built as Project #4 of a South African enterprise migration programme. The target audience is a
-bank or telco replacing hand-built on-premise servers with reproducible, auditable cloud
-infrastructure — so the design centres on network isolation, secret hygiene, deploy safety and
-operational visibility rather than on the demo endpoint.
+**Live ops console:** https://sklevel8-cloud-infra.netlify.app
+**Stack:** Node.js · Express · PostgreSQL · Redis · Terraform · AWS ECS Fargate · ALB · GitHub Actions
+
+---
+
+## Why this exists
+
+Most portfolio APIs stop at the point where `npm start` works. That is the easy half. The hard half —
+the part a bank or telco actually buys — is what happens when the service must be deployed
+repeatedly, audited, and recovered at 2 a.m.:
+
+- Where does the infrastructure definition live, and can it be rebuilt from nothing?
+- How does a deploy avoid a single second of dropped traffic?
+- What stops a bad image from reaching production, and how fast can it be undone?
+- Where are the credentials, and how long do they live?
+- When it breaks, what does the on-call engineer look at?
+
+This project was built as the answer to those questions: a deliberately boring API wrapped in a
+platform that is reproducible, auditable and safe to change. The design centres on network isolation,
+secret hygiene, deploy safety and observability rather than on the demo endpoint.
+
+## How it works
 
 ```
 Pull request ──► tests + lint + SAST + terraform validate + image build/scan
                           │
 Merge to main ────────────┘
         │
-        ├─► build immutable image  ──►  push to ECR (tag = git SHA)
-        ├─► export live task definition, render new image
-        ├─► ECS rolling update (100% min healthy, 200% max)
-        ├─► wait for service stability
-        └─► smoke test /health + /ready  ──►  fail ⇒ automatic rollback
+        ├─ build immutable image → push to ECR (tag = git SHA)
+        ├─ export live task definition, render new image
+        ├─ ECS rolling update (100% min healthy, 200% max)
+        ├─ wait for service stability
+        └─ smoke test /health + /ready → fail ⇒ automatic rollback
 ```
 
----
-
-## Architecture
+### Architecture
 
 ```mermaid
 flowchart TB
@@ -66,87 +82,76 @@ flowchart TB
   SNS -.->|Slack / Teams / email| OPS[On-call engineer]
 ```
 
-Terraform state lives in an encrypted S3 bucket with DynamoDB locking. GitHub Actions
-authenticates to AWS with short-lived OIDC tokens — there are no long-lived AWS keys anywhere in
-this repository.
+Three network tiers, because the blast radius of a compromised task should not include the database:
+ALB and NAT in public subnets, Fargate tasks in private subnets with no inbound path except the load
+balancer, and RDS/ElastiCache in isolated subnets reachable only from the compute tier.
 
----
+Terraform state lives in a versioned, encrypted S3 bucket with DynamoDB locking. GitHub Actions
+authenticates to AWS with short-lived **OIDC** tokens, so there are no long-lived AWS keys anywhere in
+the repository.
 
-## Repository layout
+### How zero downtime is guaranteed
 
-```
-.
-├── src/                        API: config, logging, metrics, routes
-│   ├── app.js                  Express app factory (dependency injection)
-│   ├── server.js               boot + SIGTERM graceful drain
-│   ├── config.js               fail-fast environment validation
-│   ├── metrics.js              Prometheus registry
-│   ├── store/postgres.js       pooled RDS access
-│   └── cache.js                ElastiCache client + cache-aside helper
-├── test/                       33 tests on node:test (no external services needed)
-├── terraform/                  VPC, ECS, ALB, RDS, ElastiCache, IAM, alarms
-│   ├── envs/prod.tfvars        production inputs
-│   └── backend.hcl.example     remote state template
-├── .github/workflows/
-│   ├── ci.yml                  PR gate: test, lint, audit, Trivy, terraform validate
-│   ├── deploy.yml              build → push → rolling update → smoke test → rollback
-│   ├── rollback.yml            manual one-click rollback
-│   └── terraform.yml           plan on PR, apply behind environment approval
-├── scripts/                    bootstrap, export task def, smoke test, rollback
-├── deploy/task-definition.json base revision (regenerated from the live service)
-├── docs/                       SRS, SDD, test plan, bug reports, runbook, logs
-├── Dockerfile                  multi-stage, non-root, SIGTERM-aware
-└── compose.yaml                local API + Postgres + Redis
-```
+1. **Rolling update with headroom.** ECS is configured for 100% minimum healthy and 200% maximum, so
+   new tasks must pass health checks before old ones are drained.
+2. **Two health endpoints with different jobs.** `/health` is dependency-free and is what the ALB
+   target group polls; `/ready` checks Postgres and Redis and returns `503` while the task is
+   draining.
+3. **`SIGTERM` handling.** `server.js` stops accepting connections, finishes in-flight requests, then
+   exits — within the ALB deregistration delay.
+4. **Smoke test before the deploy is "done".** The pipeline polls `/health` and `/ready` against the
+   new revision; a failure triggers an automatic rollback to the previous task definition.
+5. **Immutable images.** Tags are git SHAs, never `latest`, so a rollback is a known artefact, not a
+   rebuild.
 
----
+### Endpoints
 
-## Quick start (local)
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /health` | Liveness, dependency-free (ALB target group check) |
+| `GET /ready` | Readiness: Postgres + Redis; `503` while draining |
+| `GET /metrics` | Prometheus exposition |
+| `GET /api/v1/items` | List items (`?limit=` capped at 100) |
+| `POST /api/v1/items` | Create an item |
+| `GET /api/v1/items/:id` | Fetch one item |
+
+## Features
+
+- Fully declarative AWS footprint: VPC, subnets, NAT, ECS Fargate, ALB, RDS Multi-AZ, ElastiCache,
+  IAM, CloudWatch alarms, SNS
+- Remote Terraform state with S3 versioning, encryption and DynamoDB locking
+- OIDC-based GitHub Actions authentication — no static AWS credentials
+- PR gate: unit tests, ESLint, dependency audit, Trivy image scan, `terraform validate`/`plan`
+- Immutable ECR images tagged by commit SHA
+- Rolling deploys with health-gated smoke tests and automatic rollback
+- Manual `rollback.yml` workflow for one-click recovery
+- Multi-stage, non-root, `SIGTERM`-aware Dockerfile
+- 33 tests on `node:test`, no external services required
+- Prometheus metrics and a readiness endpoint distinct from liveness
+
+## Run it locally
 
 ```bash
 npm ci
-npm test                # 33 tests, no database required
+npm test                 # 33 tests, no database required
 npm run lint
+npm run test:coverage
 
-# full stack
 docker compose up --build
 curl localhost:3000/health
 curl localhost:3000/ready
 ```
 
-The API exposes:
+## Deploying to AWS
 
-| Endpoint | Purpose |
-| --- | --- |
-| `GET /health` | Liveness. Dependency free — this is the ALB target group check |
-| `GET /ready` | Readiness. Checks Postgres + Redis; returns 503 while draining |
-| `GET /metrics` | Prometheus exposition for CloudWatch/Grafana scraping |
-| `GET /api/v1/items` | List items (`?limit=` capped at 100) |
-| `POST /api/v1/items` | Create an item |
-| `GET /api/v1/items/:id` | Fetch one item |
-
----
-
-## Deploying
-
-### 1. Prerequisites
-
-- AWS account with permissions to create VPC/ECS/RDS/IAM resources
-- `terraform >= 1.7`, `awscli v2`, `jq`, Docker (for local builds)
-- A GitHub repository containing this code
-
-### 2. Bootstrap remote state
+Prerequisites: an AWS account with permissions to create VPC/ECS/RDS/IAM resources,
+`terraform >= 1.7`, `awscli v2`, `jq`, Docker.
 
 ```bash
+# 1. Remote state bucket, lock table and backend.hcl
 AWS_PROFILE=your-profile ./scripts/bootstrap-aws.sh
-```
 
-Creates the versioned, encrypted S3 bucket, the DynamoDB lock table and
-`terraform/backend.hcl`.
-
-### 3. Apply the infrastructure
-
-```bash
+# 2. Infrastructure
 cd terraform
 terraform init -backend-config=backend.hcl
 terraform plan  -var-file=envs/prod.tfvars
@@ -154,107 +159,43 @@ terraform apply -var-file=envs/prod.tfvars
 ```
 
 `app_image` starts as a placeholder on purpose: the first pipeline run registers the real task
-revision. Terraform ignores subsequent `task_definition` changes so CI owns the running revision
-while Terraform owns the infrastructure shape.
+revision. Terraform then ignores subsequent task-definition changes, so Terraform owns the shape of
+the infrastructure while CI owns what is running.
 
-### 4. Configure the repository
+The full walkthrough — repository variables, environment approval, first deploy, rollback drill —
+is in `docs/`.
 
-Settings → Variables (not secrets — none of these are credentials):
+## The deployed ops console
 
-| Variable | Example |
-| --- | --- |
-| `AWS_DEPLOY_ROLE_ARN` | `arn:aws:iam::123456789012:role/sa-enterprise-prod-github-deploy` |
-| `ECR_REPOSITORY` | `sa-enterprise-prod/api` |
-| `ECS_CLUSTER` | `sa-enterprise-prod-cluster` |
-| `ECS_SERVICE` | `sa-enterprise-prod-api` |
-| `ALB_URL` | `http://sa-enterprise-prod-alb-123456.af-south-1.elb.amazonaws.com` |
-| `AWS_REGION` | `af-south-1` |
-| `TF_STATE_BUCKET` | state bucket from step 2 |
-| `TF_STATE_LOCK_TABLE` | lock table from step 2 |
+Netlify publishes `web/` — a static console that visualises the parts of this system a static host
+can honestly show: service health, latency percentiles, SLO burn, the request topology, the pipeline
+stages, recent deployments and the API surface. It is driven by sample data shaped like the real
+CloudWatch and pipeline outputs, and is labelled as such.
 
-Then create a `production` environment (Settings → Environments) and add required reviewers if
-you want a human gate before every deploy.
+The infrastructure itself is not deployed for the public demo — an AWS account with ECS, RDS and
+NAT gateways is not something you leave standing for a portfolio link.
 
-### 5. Ship something
+## Project layout
 
-```bash
-git push origin main      # tests -> image -> rolling update -> smoke test
 ```
-
-Failures after the update trigger `scripts/rollback.sh` with the exact task definition ARN that
-was running beforehand.
-
-Manual rollback: **Actions → Rollback → Run workflow** (leave the revision empty to go to the
-previous active revision).
-
----
-
-## How zero downtime is guaranteed
-
-| Setting | Value | Effect |
-| --- | --- | --- |
-| `deployment_minimum_healthy_percent` | 100 | New tasks must pass health checks before old ones leave |
-| `deployment_maximum_percent` | 200 | Old and new revisions run side by side |
-| `deployment_circuit_breaker.rollback` | true | ECS reverts a revision that never stabilises |
-| Target group `deregistration_delay` | 20s | In-flight requests finish before the target is removed |
-| Container `stopTimeout` | 30s | Matches `GRACEFUL_SHUTDOWN_MS` (20s) + margin |
-| `/ready` returns 503 on SIGTERM | — | ALB stops routing before the process exits |
-| ALB health check | `GET /health`, 15s interval | Independent of database availability |
-| Desired count | ≥ 2 across 3 AZs | No single task or AZ is a single point of failure |
-
----
-
-## Security posture
-
-| Control | Implementation |
-| --- | --- |
-| No credentials in source | `random_password` → Secrets Manager → ECS `secrets` injection |
-| No long-lived AWS keys | GitHub OIDC federation, scoped to this repo and branch |
-| Data tier unreachable from the internet | Isolated subnets with no default route, `publicly_accessible = false` |
-| Tier-to-tier least privilege | Security group references, no CIDR-based database access |
-| Encryption in transit | HTTPS listener, `sslmode=require`, `rediss://` with auth token |
-| Encryption at rest | RDS storage encryption, ElastiCache at-rest encryption, encrypted SNS, encrypted state bucket |
-| Supply chain | Immutable ECR tags, Trivy scans on filesystem and image, `npm audit` gate |
-| Container hardening | Non-root `node` user, no build toolchain in the runtime layer |
-
----
-
-## Observability
-
-- **Logs:** structured JSON on stdout → `/ecs/sa-enterprise-prod/api` in CloudWatch, queryable
-  with Logs Insights (`fields @timestamp, level, requestId, status`).
-- **Metrics:** `/metrics` exposes request rate, latency histogram and `app_ready`.
-- **Alarms:** ALB 5XX ratio > 5% (5 min), unhealthy targets, ECS CPU > 85%, ECS memory > 85%,
-  RDS CPU > 80%, free storage < 10 GiB. All wired to an SNS topic with OK actions.
-- **Dashboard:** `${project}-${env}-overview` in CloudWatch.
-
-Slack/Teams delivery is a one-time console step: attach the `alerts_topic_arn` output to an AWS
-Chatbot Slack/Teams channel configuration.
-
----
-
-## Documentation
-
-| Phase | Deliverable | Document |
-| --- | --- | --- |
-| Requirements | SRS | [`docs/SRS.md`](docs/SRS.md) |
-| Design | SDD | [`docs/SDD.md`](docs/SDD.md) |
-| Implementation | Source code | this repository |
-| Testing | Test plan & bug reports | [`docs/TEST_PLAN.md`](docs/TEST_PLAN.md), [`docs/BUG_REPORTS.md`](docs/BUG_REPORTS.md) |
-| Deployment / maintenance | Release notes & log | [`docs/RELEASE_NOTES.md`](docs/RELEASE_NOTES.md), [`docs/MAINTENANCE_LOG.md`](docs/MAINTENANCE_LOG.md) |
-| Operations | Runbook | [`docs/RUNBOOK.md`](docs/RUNBOOK.md) |
-
----
+src/                    API: config, logging, metrics, routes, store, cache
+test/                   33 tests on node:test
+terraform/              VPC, ECS, ALB, RDS, ElastiCache, IAM, alarms
+.github/workflows/      ci.yml, deploy.yml, rollback.yml, terraform.yml
+scripts/                bootstrap, task-def export, smoke test, rollback
+deploy/                 base task definition revision
+docs/                   SRS, SDD, test plan, bug reports, runbook
+web/                    deployed static ops console
+Dockerfile              multi-stage, non-root, SIGTERM-aware
+compose.yaml            local API + Postgres + Redis
+```
 
 ## Cost note
 
-Baseline production cost is dominated by NAT gateways, RDS Multi-AZ and ElastiCache. For a demo
-account set `single_nat_gateway = true`, `db_multi_az = false`, `desired_count = 2`, and
-`availability_zone_count = 2`. Expect roughly R3k–R6k/month at low traffic in `af-south-1`;
-see `docs/RELEASE_NOTES.md` for the optimisation backlog.
+The Terraform is real: applying it creates billable resources, and the NAT gateways plus RDS
+Multi-AZ are the expensive parts. Tear down with `terraform destroy` if you only want to read the
+code.
 
----
+## Licence
 
-## License
-
-[MIT](LICENSE) © 2026 Sipho Makubalo
+MIT
